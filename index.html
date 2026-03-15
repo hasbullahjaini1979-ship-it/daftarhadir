@@ -875,8 +875,10 @@ const HARI=['Minggu','Senin','Selasa','Rabu','Kamis','Jumat','Sabtu'];
 const BULAN=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
 function updateClock(){
   const n=new Date();
-  document.getElementById('live-clock').textContent=pad(n.getHours())+':'+pad(n.getMinutes())+':'+pad(n.getSeconds());
-  document.getElementById('live-date').textContent=HARI[n.getDay()]+', '+n.getDate()+' '+BULAN[n.getMonth()]+' '+n.getFullYear();
+  // WIB = UTC+7
+  const wib=new Date(n.getTime()+7*60*60*1000);
+  document.getElementById('live-clock').textContent=pad(wib.getUTCHours())+':'+pad(wib.getUTCMinutes())+':'+pad(wib.getUTCSeconds());
+  document.getElementById('live-date').textContent=HARI[wib.getUTCDay()]+', '+wib.getUTCDate()+' '+BULAN[wib.getUTCMonth()]+' '+wib.getUTCFullYear();
 }
 setInterval(updateClock,1000); updateClock();
 function pad(n){return String(n).padStart(2,'0');}
@@ -890,12 +892,16 @@ function normalizeWaktu(val) {
   // Format HH:MM sudah benar
   if (s.match(/^\d{1,2}:\d{2}(:\d{2})?$/)) return s.substring(0,5);
   // Format ISO dengan tahun aneh (1899 = Excel serial time dari GAS)
+  // GAS menyimpan waktu sebagai UTC, tapi waktu asli adalah WIB (UTC+7)
+  // Jadi 22:49 WIB = 15:49 UTC = 1899-12-30T15:49:xx.xxxZ
   if (s.match(/^\d{4}-\d{2}-\d{2}T/)) {
     try {
       var d = new Date(s);
       if (!isNaN(d.getTime())) {
-        // Ambil jam dan menit dari UTC karena GAS simpan waktu sebagai UTC
-        return String(d.getUTCHours()).padStart(2,'0') + ':' + String(d.getUTCMinutes()).padStart(2,'0');
+        // UTC + 7 jam = WIB
+        var wibHour = (d.getUTCHours() + 7) % 24;
+        var wibMin = d.getUTCMinutes();
+        return String(wibHour).padStart(2,'0') + ':' + String(wibMin).padStart(2,'0');
       }
     } catch(e) {}
   }
@@ -1009,8 +1015,10 @@ async function gsGet(action,params={}){
 //  DATA MANAGEMENT
 // ================================================================
 function today(){
+  // Gunakan WIB (UTC+7) agar konsisten dengan data absensi
   const d=new Date();
-  return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+  const wib=new Date(d.getTime()+7*60*60*1000);
+  return wib.getUTCFullYear()+'-'+pad(wib.getUTCMonth()+1)+'-'+pad(wib.getUTCDate());
 }
 function sanLocal(obj){
   if(!obj||typeof obj!=='object') return obj;
@@ -1373,7 +1381,9 @@ async function recordAttendance(student){
   const already=attendances.find(a=>String(a.nis||'').trim()===String(student.nis||'').trim()&&String(a.tanggal||'').trim()===td);
   if(already){showNotif('⚠️ '+student.nama+' sudah hadir pukul '+already.waktu,true);return;}
   const now=new Date();
-  const waktu=pad(now.getHours())+':'+pad(now.getMinutes());
+  // Waktu WIB: gunakan toLocaleTimeString dengan timezone
+  const _wibStr=now.toLocaleTimeString('id-ID',{timeZone:'Asia/Jakarta',hour:'2-digit',minute:'2-digit',hour12:false});
+  const waktu=_wibStr.replace('.',':').substring(0,5);
   // ★ Pastikan tanggal disimpan dengan format YYYY-MM-DD yang konsisten
   const att={id:Date.now(),nis:student.nis,nama:student.nama,kelas:student.kelas,tanggal:td,waktu,status:'Hadir',keterangan:'',timestamp:now.toISOString()};
   attendances.unshift(att);
@@ -1605,7 +1615,8 @@ function renderRekap(){
 
   const hdrs=days.map(function(d,i){
     const dow=new Date(d).getDay();
-    return '<th'+(dow===0?' style="background:#ff6b6b;"':'')+'>'+(i+1)+'</th>';
+    if(dow===0) return '<th style="background:#ff6b6b;" title="Minggu">'+(i+1)+'*</th>';
+    return '<th>'+(i+1)+'</th>';
   }).join('');
 
   let totalHadir=0;
@@ -1613,8 +1624,13 @@ function renderRekap(){
     let h=0,iz=0,sk=0,a=0;
     const cells=days.map(function(d){
       const dow=new Date(d).getDay();
-      if(dow===0) return '<td style="background:#ffe8e8;"></td>';
       const att=findAtt(s,d);
+      if(dow===0 && !att) return '<td style="background:#ffe8e8;"></td>';
+      if(dow===0 && att){
+        if(att.status==='Hadir'){h++;totalHadir++;return '<td class="cell-h" style="background:#ffe8e8;">H</td>';}
+        if(att.status==='Izin'){iz++;return '<td class="cell-i" style="background:#ffe8e8;">I</td>';}
+        sk++;return '<td class="cell-s" style="background:#ffe8e8;">S</td>';
+      }
       if(!att){a++;return '<td class="cell-a">-</td>';}
       if(att.status==='Hadir'){h++;totalHadir++;return '<td class="cell-h">H</td>';}
       if(att.status==='Izin'){iz++;return '<td class="cell-i">I</td>';}
@@ -2296,7 +2312,7 @@ function exportRekapXLSX(){
   const [yr,mo]=bulan.split('-').map(Number);
   const days=Array.from({length:new Date(yr,mo,0).getDate()},(_,i)=>`${yr}-${pad(mo)}-${pad(i+1)}`);
   const cls=students.filter(s=>String(s.kelas||'').trim()===String(kelas||'').trim()).sort((a,b)=>String(a.nama||'').localeCompare(String(b.nama||'')));
-  const rows=cls.map((s,idx)=>{let h=0,iz=0,sk=0,a=0;const cells=days.map(d=>{const dow=new Date(d).getDay();if(dow===0)return'L';const att=attendances.find(at=>{const an=String(at.nis||'').trim(),sn=String(s.nis||'').trim(),anm=String(at.nama||'').toLowerCase(),snm=String(s.nama||'').toLowerCase(),td2=String(at.tanggal||'').trim();if(td2!==d)return false;if(an&&sn&&an===sn)return true;if(anm&&snm&&anm===snm)return true;return false;});if(!att){a++;return'-';}if(att.status==='Hadir'){h++;return'H';}if(att.status==='Izin'){iz++;return'I';}sk++;return'S';});return[idx+1,s.nama,...cells,h,iz,sk,a];});
+  const rows=cls.map((s,idx)=>{let h=0,iz=0,sk=0,a=0;const cells=days.map(d=>{const dow=new Date(d).getDay();const att=attendances.find(at=>{const an=String(at.nis||'').trim(),sn=String(s.nis||'').trim(),anm=String(at.nama||'').toLowerCase(),snm=String(s.nama||'').toLowerCase(),td2=String(at.tanggal||'').trim();if(td2!==d)return false;if(an&&sn&&an===sn)return true;if(anm&&snm&&anm===snm)return true;return false;});if(dow===0 && !att)return'L';if(!att){a++;return'-';}if(att.status==='Hadir'){h++;return'H';}if(att.status==='Izin'){iz++;return'I';}sk++;return'S';});return[idx+1,s.nama,...cells,h,iz,sk,a];});
   const ws=XLSX.utils.aoa_to_sheet([['No','Nama',...days.map((_,i)=>i+1),'H','I','S','A'],...rows]);
   const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Rekap');
   XLSX.writeFile(wb,`Rekap_${kelas}_${bulan}.xlsx`); showNotif('📊 Rekap berhasil diekspor!');
@@ -2361,7 +2377,7 @@ function exportRekapPDF(){
   const cls=students.filter(s=>String(s.kelas||'').trim()===String(kelas||'').trim()).sort((a,b)=>String(a.nama||'').localeCompare(String(b.nama||'')));
   doc.setFontSize(11); doc.setFont('helvetica','bold'); doc.setTextColor(26,107,60);
   doc.text(`REKAP KEHADIRAN KELAS ${kelas} — ${BULAN[mo-1].toUpperCase()} ${yr}`,148.5,30,{align:'center'});
-  const body=cls.map((s,idx)=>{let h=0,iz=0,sk=0,a=0;const cells=days.map(d=>{const ds=`${yr}-${pad(mo)}-${pad(d)}`;const dow=new Date(ds).getDay();if(dow===0)return'L';const att=attendances.find(at=>{const an=String(at.nis||'').trim(),sn=String(s.nis||'').trim(),anm=String(at.nama||'').toLowerCase(),snm=String(s.nama||'').toLowerCase(),td2=String(at.tanggal||'').trim();if(td2!==d)return false;if(an&&sn&&an===sn)return true;if(anm&&snm&&anm===snm)return true;return false;});if(!att){a++;return'-';}if(att.status==='Hadir'){h++;return'H';}if(att.status==='Izin'){iz++;return'I';}sk++;return'S';});return[idx+1,s.nama,...cells,h,iz,sk,a];});
+  const body=cls.map((s,idx)=>{let h=0,iz=0,sk=0,a=0;const cells=days.map(d=>{const ds=`${yr}-${pad(mo)}-${pad(d)}`;const dow=new Date(ds).getDay();const att=attendances.find(at=>{const an=String(at.nis||'').trim(),sn=String(s.nis||'').trim(),anm=String(at.nama||'').toLowerCase(),snm=String(s.nama||'').toLowerCase(),td2=String(at.tanggal||'').trim();if(td2!==d)return false;if(an&&sn&&an===sn)return true;if(anm&&snm&&anm===snm)return true;return false;});if(dow===0 && !att)return'L';if(!att){a++;return'-';}if(att.status==='Hadir'){h++;return'H';}if(att.status==='Izin'){iz++;return'I';}sk++;return'S';});return[idx+1,s.nama,...cells,h,iz,sk,a];});
   doc.autoTable({startY:34,head:[['#','Nama',...days,'H','I','S','A']],body,styles:{fontSize:6},headStyles:{fillColor:[26,107,60]},alternateRowStyles:{fillColor:[240,247,244]}});
   doc.save(`Rekap_${kelas}_${bulan}.pdf`); showNotif('🖨️ PDF rekap berhasil disimpan!');
 }
@@ -2424,7 +2440,7 @@ function exportRekapCSV(){
   const [yr,mo]=bulan.split('-').map(Number);
   const days=Array.from({length:new Date(yr,mo,0).getDate()},(_,i)=>`${yr}-${pad(mo)}-${pad(i+1)}`);
   const cls=students.filter(s=>String(s.kelas||'').trim()===String(kelas||'').trim()).sort((a,b)=>String(a.nama||'').localeCompare(String(b.nama||'')));
-  const rows=cls.map(s=>{let h=0,iz=0,sk=0,a=0;const cells=days.map(d=>{const dow=new Date(d).getDay();if(dow===0)return'L';const att=attendances.find(at=>{const an=String(at.nis||'').trim(),sn=String(s.nis||'').trim(),anm=String(at.nama||'').toLowerCase(),snm=String(s.nama||'').toLowerCase(),td2=String(at.tanggal||'').trim();if(td2!==d)return false;if(an&&sn&&an===sn)return true;if(anm&&snm&&anm===snm)return true;return false;});if(!att){a++;return'-';}if(att.status==='Hadir'){h++;return'H';}if(att.status==='Izin'){iz++;return'I';}sk++;return'S';});return[s.nama,...cells,h,iz,sk,a];});
+  const rows=cls.map(s=>{let h=0,iz=0,sk=0,a=0;const cells=days.map(d=>{const dow=new Date(d).getDay();const att=attendances.find(at=>{const an=String(at.nis||'').trim(),sn=String(s.nis||'').trim(),anm=String(at.nama||'').toLowerCase(),snm=String(s.nama||'').toLowerCase(),td2=String(at.tanggal||'').trim();if(td2!==d)return false;if(an&&sn&&an===sn)return true;if(anm&&snm&&anm===snm)return true;return false;});if(dow===0 && !att)return'L';if(!att){a++;return'-';}if(att.status==='Hadir'){h++;return'H';}if(att.status==='Izin'){iz++;return'I';}sk++;return'S';});return[s.nama,...cells,h,iz,sk,a];});
   dlCSV(`Rekap_${kelas}_${bulan}.csv`,[['Nama',...days.map((_,i)=>i+1),'H','I','S','A'],...rows]);
 }
 function exportLaporanCSV(){
