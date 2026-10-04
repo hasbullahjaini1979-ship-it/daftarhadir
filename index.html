@@ -1062,13 +1062,13 @@ async function gsSend(action, payload){
 }
 
 // ── Ambil data dari Google Apps Script (GET) ──────────────────
-async function gsGet(action,params={}){
+async function gsGet(action,params={},timeoutMs=15000){
   if(!CFG.GS_URL) return null;
   try{
     let url=CFG.GS_URL+'?action='+action;
     Object.keys(params).forEach(k=>url+='&'+k+'='+encodeURIComponent(params[k]));
     const ctrl=new AbortController();
-    const timer=setTimeout(()=>ctrl.abort(),15000);
+    const timer=setTimeout(()=>ctrl.abort(),timeoutMs);
     const resp=await fetch(url,{redirect:'follow',signal:ctrl.signal});
     clearTimeout(timer);
     const txt=await resp.text();
@@ -1088,6 +1088,14 @@ async function gsGet(action,params={}){
 function today(){
   const d=new Date();
   return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+}
+// ── HARI LIBUR OTOMATIS: Sabtu (6) & Minggu (0) = tanggal merah ──
+// Tidak dihitung sebagai hari sekolah / hari siswa tidak masuk.
+function isLiburDow(dow){return dow===0||dow===6;}
+function isLibur(ds){
+  const [y,m,d]=String(ds).slice(0,10).split('-').map(Number);
+  if(!y||!m||!d)return false;
+  return isLiburDow(new Date(y,m-1,d).getDay());
 }
 function loadLocal(){
   students=JSON.parse(localStorage.getItem('sdn_students')||'[]');
@@ -1134,13 +1142,14 @@ function initSample(){
   });
   saveLocal();
 }
-async function loadFromGS(silent=false){
-  if(!CFG.GS_URL) return;
+async function loadFromGS(silent=false,timeoutMs=15000){
+  if(!CFG.GS_URL) return false;
+  let sukses=false;
   const btn=document.querySelector('button[onclick="loadFromGS()"]');
   if(!silent&&btn){btn._orig=btn.innerHTML;btn.innerHTML='⏳ Mengambil...';btn.disabled=true;}
   if(!silent)showNotif('🔄 Mengambil semua data dari Google Sheets...');
   try{
-    const r=await gsGet('getAll');
+    const r=await gsGet('getAll',{},timeoutMs);
     if(r&&!r.error){
       // Sanitize: pastikan semua field string agar localeCompare/includes tidak error
       const san=obj=>{const o={};Object.keys(obj).forEach(k=>{o[k]=obj[k]!=null?String(obj[k]):'';});return o;};
@@ -1156,21 +1165,42 @@ async function loadFromGS(silent=false){
       saveLocal();
       refreshAll();
       setGSOnline(true);
-      if(!silent)showNotif('✅ Selesai! '+students.length+' siswa, '+attendances.length+' absen diambil dari GS.');
+      sukses=true;
+      showNotif(silent
+        ?'✅ Terhubung otomatis ke Google Sheets — '+students.length+' siswa, '+attendances.length+' absen dimuat.'
+        :'✅ Selesai! '+students.length+' siswa, '+attendances.length+' absen diambil dari GS.');
     } else if(r&&r.error==='network'){
       // "Failed to fetch" = tidak ada internet atau URL GS salah/expired
       // Data lokal tetap digunakan — tidak ganggu user
       setGSOnline(false);
     } else if(r&&r.error==='timeout'){
-      showNotif('⏱️ Koneksi GS timeout — cek internet & URL GS', true);
+      setGSOnline(false);
+      if(!silent)showNotif('⏱️ Koneksi GS timeout — cek internet & URL GS', true);
     } else {
       // Kemungkinan URL belum di-deploy atau Apps Script error
+      setGSOnline(false);
     }
   } catch(e){
-    // Tangkap semua error tanpa menampilkan ke user jika GS tidak wajib
+    setGSOnline(false);
   } finally {
     if(!silent&&btn){btn.innerHTML=btn._orig;btn.disabled=false;}
   }
+  return sukses;
+}
+// ── AUTO-CONNECT: dipanggil otomatis saat aplikasi dibuka ──
+// Mencoba sampai 3x (Apps Script kadang lambat di percobaan pertama).
+async function autoConnectGS(){
+  if(!CFG.GS_URL){updateGSStatusUI();return;}
+  const sEl=document.getElementById('gs-status');
+  if(sEl){sEl.className='gs-status disconnected';sEl.textContent='● Menghubungkan...';}
+  showNotif('🔄 Menghubungkan ke Google Sheets...');
+  const MAX=3;
+  for(let i=1;i<=MAX;i++){
+    const ok=await loadFromGS(true,i===1?30000:20000);
+    if(ok)return;
+    if(i<MAX)await new Promise(res=>setTimeout(res,2000*i));
+  }
+  showNotif('⚠️ Gagal terhubung ke Google Sheets — memakai data lokal. Cek internet & URL di Pengaturan.',true);
 }
 
 // Kirim SEMUA data lokal ke Google Sheets sekaligus
@@ -1291,7 +1321,7 @@ function updateStats(){
   const hadirToday=attendances.filter(a=>a.tanggal===td&&a.status==='Hadir').length;
   document.getElementById('stat-total').textContent=total;
   document.getElementById('stat-hadir').textContent=hadirToday;
-  document.getElementById('stat-belum').textContent=total-hadirToday;
+  document.getElementById('stat-belum').textContent=isLibur(td)?'Libur':Math.max(0,total-hadirToday);
   const cls=getClassNames();
   document.getElementById('stat-kelas').textContent=cls.length;
   renderClassStats(cls,td);
@@ -1699,12 +1729,12 @@ function renderRekap(){
   const days=Array.from({length:new Date(yr,mo,0).getDate()},(_,i)=>`${yr}-${pad(mo)}-${pad(i+1)}`);
   const cls=students.filter(s=>s.kelas===kelas).sort((a,b)=>String(a.nama||'').localeCompare(String(b.nama||'')));
   if(!cls.length){c.innerHTML=`<div class="empty-state"><div class="empty-icon">👥</div><p>Tidak ada siswa di kelas ${kelas}</p></div>`;return;}
-  const hdrs=days.map((d,i)=>{const dow=new Date(d).getDay();return `<th style="${dow===0?'background:#ff6b6b;':''}">${i+1}</th>`;}).join('');
+  const hdrs=days.map((d,i)=>{const dow=new Date(d).getDay();return `<th style="${isLiburDow(dow)?'background:#ff6b6b;':''}">${i+1}</th>`;}).join('');
   const rows=cls.map((s,idx)=>{
     let h=0,iz=0,sk=0,a=0;
     const cells=days.map(d=>{
       const dow=new Date(d).getDay();
-      if(dow===0)return '<td style="background:#ffe8e8;"></td>';
+      if(isLiburDow(dow))return '<td style="background:#ffe8e8;"></td>';
       const att=attendances.find(at=>at.nis===s.nis&&at.tanggal===d);
       if(!att){a++;return '<td class="cell-a">-</td>';}
       if(att.status==='Hadir'){h++;return '<td class="cell-h">H</td>';}
@@ -1740,7 +1770,7 @@ function renderLaporanSiswa(){
   for(let d=1;d<=new Date(yr,mo,0).getDate();d++){
     const ds=`${yr}-${pad(mo)}-${pad(d)}`;
     const dow=new Date(ds).getDay();
-    if(dow===0)continue;
+    if(isLiburDow(dow))continue;
     const att=attendances.find(at=>at.nis===nis&&at.tanggal===ds);
     const stat=att?att.status:'Alfa';
     if(!att)a++;else if(att.status==='Hadir')h++;else if(att.status==='Izin')iz++;else sk++;
@@ -1799,8 +1829,9 @@ function renderWAList(){
   const list=students.filter(s=>!kelas||s.kelas===kelas).sort((a,b)=>String(a.kelas||'').localeCompare(String(b.kelas||''),undefined,{numeric:true})||String(a.nama||'').localeCompare(String(b.nama||'')));
   c.innerHTML=`<div class="table-wrap"><table><thead><tr><th>Nama</th><th>Kelas</th><th>Status ${fmtDate(tgl)}</th><th>No WA Ortu</th><th>Kirim</th></tr></thead><tbody>${list.map(s=>{
     const att=attendances.find(a=>a.nis===s.nis&&a.tanggal===tgl);
-    const stat=att?att.status:'Belum Absen';
-    const link=s.wa?buildWADaily(s,att,tgl):null;
+    const libur=!att&&isLibur(tgl);
+    const stat=att?att.status:(libur?'Libur':'Belum Absen');
+    const link=(s.wa&&!libur)?buildWADaily(s,att,tgl):null;
     return `<tr><td><strong>${s.nama}</strong></td><td>${s.kelas}</td><td><span class="badge badge-${(att?stat:'alfa').toLowerCase()}">${stat}</span></td><td style="font-size:11px;color:${s.wa?'#25d366':'#ccc'};">${s.wa||'–'}</td><td>${link?`<a class="wa-btn" href="${link}" target="_blank" style="font-size:10px;padding:4px 9px;">📱</a>`:'<span style="color:#ccc;font-size:11px;">–</span>'}</td></tr>`;
   }).join('')}</tbody></table></div>`;
 }
@@ -2552,7 +2583,7 @@ function exportRekapXLSX(){
   const headers=['No','Nama Siswa',...days.map((_,i)=>i+1),'H','I','S','A'];
   const rows=cls.map((s,idx)=>{
     let h=0,iz=0,sk=0,a=0;
-    const cells=days.map(d=>{const dow=new Date(d).getDay();if(dow===0)return'L';const att=attendances.find(at=>at.nis===s.nis&&at.tanggal===d);if(!att){a++;return'-';}if(att.status==='Hadir'){h++;return'H';}if(att.status==='Izin'){iz++;return'I';}sk++;return'S';});
+    const cells=days.map(d=>{const dow=new Date(d).getDay();if(isLiburDow(dow))return'L';const att=attendances.find(at=>at.nis===s.nis&&at.tanggal===d);if(!att){a++;return'-';}if(att.status==='Hadir'){h++;return'H';}if(att.status==='Izin'){iz++;return'I';}sk++;return'S';});
     return[idx+1,s.nama,...cells,h,iz,sk,a];
   });
   const ws=XLSX.utils.aoa_to_sheet([headers,...rows]); const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Rekap');
@@ -2567,7 +2598,7 @@ function exportLaporanSiswaXLSX(){
   const [yr,mo]=bulan.split('-').map(Number);
   const rows=[['Tanggal','Hari','Status','Waktu','Keterangan']];
   for(let d=1;d<=new Date(yr,mo,0).getDate();d++){
-    const ds=`${yr}-${pad(mo)}-${pad(d)}`;const dow=new Date(ds).getDay();if(dow===0)continue;
+    const ds=`${yr}-${pad(mo)}-${pad(d)}`;const dow=new Date(ds).getDay();if(isLiburDow(dow))continue;
     const att=attendances.find(at=>at.nis===nis&&at.tanggal===ds);
     rows.push([fmtDate(ds),HARI[dow],att?att.status:'Alfa',att?.waktu||'-',att?.keterangan||'']);
   }
@@ -2633,7 +2664,7 @@ function exportRekapPDF(){
     let h=0,iz=0,sk=0,a=0;
     const cells=days.map(d=>{
       const ds=`${yr}-${pad(mo)}-${pad(d)}`;const dow=new Date(ds).getDay();
-      if(dow===0)return'L';
+      if(isLiburDow(dow))return'L';
       const att=attendances.find(at=>at.nis===s.nis&&at.tanggal===ds);
       if(!att){a++;return'-';}if(att.status==='Hadir'){h++;return'H';}if(att.status==='Izin'){iz++;return'I';}sk++;return'S';
     });
@@ -2659,7 +2690,7 @@ function exportLaporanSiswaPDF(){
   let h=0,iz=0,sk=0,a=0;
   const rows=[];
   for(let d=1;d<=new Date(yr,mo,0).getDate();d++){
-    const ds=`${yr}-${pad(mo)}-${pad(d)}`;const dow=new Date(ds).getDay();if(dow===0)continue;
+    const ds=`${yr}-${pad(mo)}-${pad(d)}`;const dow=new Date(ds).getDay();if(isLiburDow(dow))continue;
     const att=attendances.find(at=>at.nis===nis&&at.tanggal===ds);
     const stat=att?att.status:'Alfa';
     if(!att)a++;else if(att.status==='Hadir')h++;else if(att.status==='Izin')iz++;else sk++;
@@ -2717,7 +2748,7 @@ function exportRekapCSV(){
   const days=Array.from({length:new Date(yr,mo,0).getDate()},(_,i)=>`${yr}-${pad(mo)}-${pad(i+1)}`);
   const cls=students.filter(s=>s.kelas===kelas).sort((a,b)=>String(a.nama||'').localeCompare(String(b.nama||'')));
   const hdrs=['Nama',...days.map((_,i)=>i+1),'H','I','S','A'];
-  const rows=cls.map(s=>{let h=0,iz=0,sk=0,a=0;const cells=days.map(d=>{const dow=new Date(d).getDay();if(dow===0)return'L';const att=attendances.find(at=>at.nis===s.nis&&at.tanggal===d);if(!att){a++;return'-';}if(att.status==='Hadir'){h++;return'H';}if(att.status==='Izin'){iz++;return'I';}sk++;return'S';});return[s.nama,...cells,h,iz,sk,a];});
+  const rows=cls.map(s=>{let h=0,iz=0,sk=0,a=0;const cells=days.map(d=>{const dow=new Date(d).getDay();if(isLiburDow(dow))return'L';const att=attendances.find(at=>at.nis===s.nis&&at.tanggal===d);if(!att){a++;return'-';}if(att.status==='Hadir'){h++;return'H';}if(att.status==='Izin'){iz++;return'I';}sk++;return'S';});return[s.nama,...cells,h,iz,sk,a];});
   dlCSV(`Rekap_${kelas}_${bulan}.csv`,[hdrs,...rows]);
 }
 function exportLaporanCSV(){
@@ -3062,7 +3093,7 @@ function init(){
   loadTodayAttendance();
   updateInfoPanel();
   updateGSStatusUI();
-  if(CFG.GS_URL)loadFromGS(true); // true = silent background load
+  autoConnectGS(); // otomatis ambil data dari Google Sheets saat aplikasi dibuka
 }
 init();
 </script>
