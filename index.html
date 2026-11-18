@@ -249,12 +249,24 @@ tbody tr:last-child td{border-bottom:none;}
   .kartu-pelajar{width:100%;min-width:unset;height:auto;aspect-ratio:85.6/54;}
   .kartu-foto-wrap{width:28px;height:34px;}
 }
+
+/* NOTIFIKASI SCAN BESAR */
+#scan-notif{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%) scale(.8);width:min(92vw,520px);padding:26px 22px;border-radius:24px;text-align:center;color:#fff;z-index:10000;opacity:0;pointer-events:none;transition:all .35s cubic-bezier(.34,1.56,.64,1);box-shadow:0 20px 60px rgba(0,0,0,.4);}
+#scan-notif.show{opacity:1;transform:translate(-50%,-50%) scale(1);}
+#scan-notif.ontime{background:linear-gradient(135deg,#0f4225,#28a05a);}
+#scan-notif.late{background:linear-gradient(135deg,#c0392b,#f5a623);}
+#scan-notif.dup{background:linear-gradient(135deg,#1a5276,#2471a3);}
+#scan-notif.err{background:linear-gradient(135deg,#7b241c,#e74c3c);}
+#scan-notif-icon{font-size:52px;line-height:1;margin-bottom:8px;}
+#scan-notif-text{font-family:'Poppins',sans-serif;font-size:19px;font-weight:800;line-height:1.35;}
+#scan-notif-sub{font-size:15px;font-weight:800;margin-top:10px;background:rgba(255,255,255,.22);border-radius:30px;padding:6px 14px;display:none;}
 </style>
 </head>
 <body>
 
 <!-- NOTIFICATION -->
 <div id="notification-bar">✅ Selamat datang!</div>
+<div id="scan-notif"><div id="scan-notif-icon"></div><div id="scan-notif-text"></div><div id="scan-notif-sub"></div></div>
 
 <!-- ===== MODALS ===== -->
 
@@ -900,6 +912,29 @@ tbody tr:last-child td{border-bottom:none;}
   </div>
 
   <div class="card">
+    <div class="card-title">⏰ Jam Batas Datang & Suara</div>
+    <p style="font-size:12px;color:var(--text2);margin-bottom:12px;">Siswa yang scan setelah jam batas dihitung <strong>terlambat</strong> (ditampilkan dalam jam/menit/detik). Pengaturan jam batas ikut tersimpan ke Google Sheets (sheet DataSekolah).</p>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Jam batas akhir datang</label>
+        <input type="time" step="1" id="set-jam-batas" class="input-field" value="07:00:00">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Suara notifikasi (perangkat ini)</label>
+        <select id="set-suara" class="input-field" onchange="setSuara(this.value)">
+          <option value="1">🔊 Aktif</option>
+          <option value="0">🔇 Mati</option>
+        </select>
+      </div>
+    </div>
+    <div style="display:flex;gap:7px;flex-wrap:wrap;">
+      <button class="btn-primary" onclick="saveJamBatas()">💾 Simpan Jam Batas</button>
+      <button class="btn-secondary" onclick="testSuara()">🔊 Tes Suara</button>
+    </div>
+    <p id="jam-batas-info" style="font-size:11px;color:var(--text2);margin-top:9px;font-weight:700;"></p>
+  </div>
+
+  <div class="card">
     <div class="card-title">🔐 Ubah Password</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
       <div>
@@ -973,6 +1008,8 @@ const CFG = {
   GS_URL: GS_URL_TETAP || localStorage.getItem('gs_url') || '',
   GURU_PWD: localStorage.getItem('guru_pwd') || 'guru1234',
   ADMIN_PWD: localStorage.getItem('admin_pwd') || 'admin2024',
+  JAM_BATAS: localStorage.getItem('jam_batas') || '07:00:00',
+  SUARA: localStorage.getItem('suara_on') !== '0',
 };
 
 let students = [];
@@ -1158,7 +1195,7 @@ async function loadFromGS(silent=false,timeoutMs=15000){
       if(r.classes&&r.classes.length>0) classes=r.classes.map(san);
       if(r.teachers&&r.teachers.length>0) teachers=r.teachers.map(san);
       if(r.school&&Object.keys(r.school).length>0){
-        schoolData=r.school;
+        schoolData=r.school; applyJamBatasFromSchool(r.school);
         if(r.school.logoUrl&&r.school.logoUrl.startsWith('http')){logoData=r.school.logoUrl;applyLogo();}
         applySchoolData(); fillSchoolForm();
       }
@@ -1241,7 +1278,7 @@ async function pushAllToGS(){
   } catch(e){
     showNotif('❌ Error: '+e.message,true);
   } finally {
-    if(!silent&&btn){btn.innerHTML=btn._orig;btn.disabled=false;}
+    if(btn){btn.innerHTML=btn._orig;btn.disabled=false;}
   }
 }
 function refreshAll(){
@@ -1348,7 +1385,7 @@ function loadTodayAttendance(){
     const c=clrs[a.nama.charCodeAt(0)%clrs.length];
     return `<div class="attendance-item">
       <div class="att-avatar" style="background:${c}">${a.nama.charAt(0)}</div>
-      <div class="att-info"><div class="att-name">${a.nama}${i===0?' <span class="new-badge">BARU</span>':''}</div><div class="att-detail">${a.status==='Hadir'?'✅':'📋'} ${a.status} · Kls ${a.kelas}</div></div>
+      <div class="att-info"><div class="att-name">${a.nama}${i===0?' <span class="new-badge">BARU</span>':''}</div><div class="att-detail">${a.status==='Hadir'?'✅':'📋'} ${a.status} · Kls ${a.kelas}${(a.keterangan||'').indexOf('Terlambat')===0?' · <span style="color:#e74c3c;font-weight:800;">⏰ '+a.keterangan+'</span>':''}</div></div>
       <div class="att-time">${a.waktu}</div>
     </div>`;
   }).join('');
@@ -1385,10 +1422,15 @@ function stopScanner(){
     });
   }
 }
+let _lastScanCode='', _lastScanTime=0;
 function onQRScanned(code){
+  // kamera membaca QR berkali-kali per detik -> abaikan kode yang sama selama 6 detik
+  const t=Date.now();
+  if(code===_lastScanCode&&t-_lastScanTime<6000)return;
+  _lastScanCode=code; _lastScanTime=t;
   const s=students.find(st=>st.qr===code||st.nis===code);
   if(s) recordAttendance(s);
-  else showNotif('❌ Kode tidak dikenali: '+code,true);
+  else showScanNotif('err','KODE QR TIDAK DIKENALI','','Kode Q R tidak dikenali');
 }
 function processManualInput(){
   const code=document.getElementById('manual-qr-input').value.trim();
@@ -1407,20 +1449,158 @@ function processDirectSelect(){
 // ================================================================
 //  RECORD ATTENDANCE  ← auto sync GS
 // ================================================================
+// ── JAM BATAS ──
+function getBatasSec(){
+  const m=String(CFG.JAM_BATAS||'07:00:00').match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if(!m)return 7*3600;
+  return (+m[1])*3600+(+m[2])*60+(+(m[3]||0));
+}
+function fmtJamBatas(){const t=getBatasSec();return pad(Math.floor(t/3600))+':'+pad(Math.floor(t%3600/60))+':'+pad(t%60);}
+function fmtTelat(sec){
+  const j=Math.floor(sec/3600),m=Math.floor(sec%3600/60),d=sec%60;
+  const p=[];
+  if(j)p.push(j+' jam');
+  if(m)p.push(m+' menit');
+  if(d||!p.length)p.push(d+' detik');
+  return p.join(' ');
+}
+function jamUcap(w){
+  const m=String(w).match(/(\d+):(\d+)/);
+  if(!m)return String(w);
+  return (+m[2]===0)?((+m[1])+' tepat'):((+m[1])+' lewat '+(+m[2])+' menit');
+}
+function updateJamBatasUI(){
+  const inp=document.getElementById('set-jam-batas'); if(inp)inp.value=fmtJamBatas();
+  const sel=document.getElementById('set-suara'); if(sel)sel.value=CFG.SUARA?'1':'0';
+  const inf=document.getElementById('jam-batas-info'); if(inf)inf.textContent='Jam batas aktif: '+fmtJamBatas()+' — lewat dari jam ini dihitung terlambat.';
+}
+function applyJamBatasFromSchool(sch){
+  if(!sch||!sch.jamBatas)return;
+  const m=String(sch.jamBatas).match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if(!m)return;
+  CFG.JAM_BATAS=pad(+m[1])+':'+m[2]+':'+(m[3]||'00');
+  localStorage.setItem('jam_batas',CFG.JAM_BATAS);
+  updateJamBatasUI();
+}
+async function saveJamBatas(){
+  const v=document.getElementById('set-jam-batas').value;
+  const m=String(v).match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if(!m){showNotif('⚠️ Isi jam batas dulu',true);return;}
+  const pw=prompt('Masukkan password admin untuk menyimpan jam batas:');
+  if(pw===null)return;
+  if(pw!==CFG.ADMIN_PWD){showNotif('❌ Password admin salah!',true);return;}
+  CFG.JAM_BATAS=pad(+m[1])+':'+m[2]+':'+(m[3]||'00');
+  localStorage.setItem('jam_batas',CFG.JAM_BATAS);
+  // diawali "batas=" supaya Google Sheets tidak mengubahnya jadi format jam
+  schoolData.jamBatas='batas='+CFG.JAM_BATAS;
+  saveLocal(); updateJamBatasUI();
+  const r=await gsSend('saveSchool',{jamBatas:schoolData.jamBatas});
+  showNotif(r.status==='ok'?'✅ Jam batas '+CFG.JAM_BATAS+' tersimpan & dikirim ke Google Sheets':'✅ Jam batas '+CFG.JAM_BATAS+' tersimpan lokal (GS offline)');
+}
+function setSuara(v){
+  CFG.SUARA=(v==='1');
+  localStorage.setItem('suara_on',CFG.SUARA?'1':'0');
+  showNotif(CFG.SUARA?'🔊 Suara notifikasi aktif':'🔇 Suara notifikasi dimatikan');
+}
+function testSuara(){
+  const was=CFG.SUARA; CFG.SUARA=true;
+  showScanNotif('ontime','ABSENSI BERHASIL, HAIIII CONTOH, KAMU HEBAT, DATANG TEPAT WAKTU.','','Absensi berhasil. Haiii contoh, kamu hebat, datang tepat waktu.');
+  CFG.SUARA=was;
+}
+
+// ── SUARA & NOTIFIKASI SCAN ──
+let _actx=null, _scanNotifTimer=null;
+function beep(type){
+  if(!CFG.SUARA)return;
+  try{
+    _actx=_actx||new (window.AudioContext||window.webkitAudioContext)();
+    const seq=type==='ontime'?[880,1175]:type==='late'?[440,330]:type==='dup'?[660,660]:[220,180];
+    let t=_actx.currentTime;
+    seq.forEach(f=>{
+      const o=_actx.createOscillator(),g=_actx.createGain();
+      o.type='sine'; o.frequency.value=f;
+      g.gain.setValueAtTime(.18,t); g.gain.exponentialRampToValueAtTime(.001,t+.18);
+      o.connect(g); g.connect(_actx.destination); o.start(t); o.stop(t+.2); t+=.2;
+    });
+  }catch(e){}
+}
+function speak(text){
+  if(!CFG.SUARA||!('speechSynthesis' in window))return;
+  try{
+    speechSynthesis.cancel();
+    const u=new SpeechSynthesisUtterance(text);
+    u.lang='id-ID'; u.rate=0.95; u.pitch=1.1;
+    const v=speechSynthesis.getVoices().find(x=>/^id/i.test(x.lang));
+    if(v)u.voice=v;
+    speechSynthesis.speak(u);
+  }catch(e){}
+}
+function showScanNotif(type,text,sub,speech){
+  const el=document.getElementById('scan-notif');
+  const icons={ontime:'🌟',late:'⏰',dup:'🤔',err:'❌'};
+  document.getElementById('scan-notif-icon').textContent=icons[type]||'';
+  document.getElementById('scan-notif-text').textContent=text;
+  const sb=document.getElementById('scan-notif-sub');
+  sb.textContent=sub||''; sb.style.display=sub?'inline-block':'none';
+  el.className=type+' show';
+  clearTimeout(_scanNotifTimer);
+  _scanNotifTimer=setTimeout(()=>el.classList.remove('show'),5500);
+  beep(type);
+  setTimeout(()=>speak(speech||text),type==='err'?300:450);
+}
+
+// ── ANTREAN KIRIM GS (jika koneksi gagal) ──
+function getPending(){try{return JSON.parse(localStorage.getItem('sdn_pending_att')||'[]');}catch(e){return [];}}
+function setPending(a){localStorage.setItem('sdn_pending_att',JSON.stringify(a));}
+async function flushPendingAtt(){
+  if(!CFG.GS_URL)return;
+  const p=getPending();
+  if(!p.length)return;
+  const rest=[];
+  for(const att of p){
+    const r=await gsSend('addAttendance',att);
+    if(r.status!=='ok')rest.push(att);
+  }
+  setPending(rest);
+  if(rest.length<p.length)showNotif('☁️ '+(p.length-rest.length)+' absensi tertunda berhasil dikirim ke Google Sheets');
+}
+
 async function recordAttendance(student){
   const td=today();
-  const already=attendances.find(a=>a.nis===student.nis&&a.tanggal===td);
-  if(already){showNotif('⚠️ '+student.nama+' sudah hadir pukul '+already.waktu,true);return;}
+  const NAMA=String(student.nama||'').toUpperCase();
+  const already=attendances.find(a=>a.nis===student.nis&&a.tanggal===td&&a.status!=='Alfa');
+  if(already){
+    const jam=already.waktu||'-';
+    showScanNotif('dup','HAIIII '+NAMA+', KAMU SUDAH ABSEN PUKUL '+jam+', LUPA YA?','',
+      'Haiii '+student.nama+', kamu sudah absen pukul '+jamUcap(jam)+', lupa ya?');
+    return;
+  }
+  attendances=attendances.filter(a=>!(a.nis===student.nis&&a.tanggal===td));
   const now=new Date();
-  const waktu=pad(now.getHours())+':'+pad(now.getMinutes());
-  const att={id:Date.now(),nis:student.nis,nama:student.nama,kelas:student.kelas,tanggal:td,waktu,status:'Hadir',keterangan:'',timestamp:now.toISOString()};
+  const nowSec=now.getHours()*3600+now.getMinutes()*60+now.getSeconds();
+  const telat=nowSec-getBatasSec();
+  const terlambat=telat>0;
+  const waktu=pad(now.getHours())+':'+pad(now.getMinutes())+':'+pad(now.getSeconds());
+  const att={id:Date.now(),nis:student.nis,nama:student.nama,kelas:student.kelas,tanggal:td,waktu,status:'Hadir',
+    keterangan:terlambat?('Terlambat '+fmtTelat(telat)):'Tepat waktu',timestamp:now.toISOString()};
   attendances.unshift(att);
   saveLocal();
-  showNotif('🎉 Terima kasih '+student.nama+' sudah hadir di sekolah!');
   updateStats(); loadTodayAttendance();
-  // AUTO SYNC GS
+  if(terlambat){
+    showScanNotif('late','ABSENSI BERHASIL, HAIIII '+NAMA+', KENAPA KAMU DATANG TERLAMBAT, JELASKAN KE GURU PIKET.','⏰ Terlambat '+fmtTelat(telat),
+      'Absensi berhasil. Haiii '+student.nama+', kenapa kamu datang terlambat, jelaskan ke guru piket. Kamu terlambat '+fmtTelat(telat)+'.');
+  }else{
+    showScanNotif('ontime','ABSENSI BERHASIL, HAIIII '+NAMA+', KAMU HEBAT, DATANG TEPAT WAKTU.','',
+      'Absensi berhasil. Haiii '+student.nama+', kamu hebat, datang tepat waktu.');
+  }
+  // LANGSUNG kirim ke Google Sheets setelah scan
   const r=await gsSend('addAttendance',att);
-  if(r.status==='ok') showNotif('✅ '+student.nama+' hadir · Data tersimpan ke Google Sheets!');
+  if(r.status==='ok'){
+    showNotif('☁️ '+student.nama+' tersimpan ke Google Sheets');
+  }else if(r.status!=='local_only'){
+    setPending([...getPending(),att]);
+    showNotif('⚠️ GS gagal dihubungi — absensi masuk antrean & dikirim ulang otomatis',true);
+  }
 }
 
 // ================================================================
@@ -2290,7 +2470,7 @@ function exportGuruPDF(){
 //  SCHOOL DATA  ← auto sync GS → sheet DataSekolah
 // ================================================================
 async function saveSchoolData(){
-  schoolData={
+  schoolData={...schoolData,
     nama:document.getElementById('sch-nama').value.trim(),
     npsn:document.getElementById('sch-npsn').value.trim(),
     kepsek:document.getElementById('sch-kepsek').value.trim(),
@@ -2845,6 +3025,7 @@ function changePwd(role){
   ['old','new','conf'].forEach(p=>document.getElementById(`${p}-pwd-${role}`).value='');
 }
 function updateInfoPanel(){
+  updateJamBatasUI();
   const sn=document.getElementById('info-sekolah');if(sn)sn.textContent=schoolData.nama||'SD Negeri 1 Raja';
   const ts=document.getElementById('info-total-siswa');if(ts)ts.textContent=students.length+' siswa';
   const tk=document.getElementById('info-total-kelas');if(tk)tk.textContent=classes.length+' kelas';
@@ -3093,7 +3274,9 @@ function init(){
   loadTodayAttendance();
   updateInfoPanel();
   updateGSStatusUI();
-  autoConnectGS(); // otomatis ambil data dari Google Sheets saat aplikasi dibuka
+  updateJamBatasUI();
+  flushPendingAtt().then(()=>autoConnectGS()); // kirim antrean dulu, lalu ambil data dari Google Sheets
+  setInterval(flushPendingAtt,60000);
 }
 init();
 </script>
