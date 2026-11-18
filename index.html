@@ -1528,7 +1528,9 @@ function speak(text){
   if(!CFG.SUARA||!('speechSynthesis' in window))return;
   try{
     speechSynthesis.cancel();
-    const u=new SpeechSynthesisUtterance(text);
+    // Kata HURUF KAPITAL (mis. MIKAYLA) dieja per huruf oleh mesin suara -> ubah jadi "Mikayla"
+    const t=String(text).replace(/[A-Z]{2,}/g,w=>w.charAt(0)+w.slice(1).toLowerCase());
+    const u=new SpeechSynthesisUtterance(t);
     u.lang='id-ID'; u.rate=0.95; u.pitch=1.1;
     const v=speechSynthesis.getVoices().find(x=>/^id/i.test(x.lang));
     if(v)u.voice=v;
